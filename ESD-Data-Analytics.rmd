@@ -1,0 +1,162 @@
+---
+title: "ESD-Data-Analysis"
+author: "Alex Burzinski"
+date: "10/30/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Import libraries
+```{r}
+library(dplyr)
+```
+
+### Import the Data
+```{r}
+library(RMySQL)
+
+mySQLConn <- DBI::dbConnect(MySQL(), user='greenwic_nwu_147', password=rstudioapi::askForPassword('Database Password:')
+                 ,dbname='greenwic_edu_nwu', host='67.225.186.169')
+
+#dbListTables(mydb)
+
+masterTable = 'greenwich_master_nwu_fall_2018_proj1'
+roleTable = 'greenwich_role_nwu_fall_2018_proj1'
+tagsTable = 'greenwich_tags_nwu_fall_2018_proj1'
+
+
+masterData <- dbReadTable(mySQLConn, masterTable)
+roleData <- dbReadTable(mySQLConn, roleTable)
+tagsData <- dbReadTable(mySQLConn, tagsTable)
+
+dbDisconnect(mySQLConn)
+```
+
+### Save data to csv files
+```{r}
+write.csv(masterData, file = './masterData.csv', row.names = FALSE)
+write.csv(roleData, file = './roleData.csv', row.names = FALSE)
+write.csv(tagsData, file = './tagsData.csv', row.names = FALSE)
+```
+
+
+### Read the data from files
+```{r}
+masterData <- read.csv('./masterData.csv', header = TRUE, stringsAsFactors = FALSE)
+roleData <- read.csv('./roleData.csv', header = TRUE, stringsAsFactors = TRUE)
+tagsData <- read.csv('./tagsData.csv', header = TRUE, stringsAsFactors = TRUE)
+```
+
+
+### Data Cleansing
+```{r}
+masterData$salary <- as.numeric(masterData$salary)
+masterData$post_date <- as.Date(masterData$post_date, format = '%Y-%m-%d')
+masterData$fill_date <- as.Date(masterData$fill_date, format = '%Y-%m-%d')
+```
+
+
+### Examine demand for talent for each industry
+```{r}
+barplot(table(masterData$vertical))
+
+masterData$salary <- as.numeric(masterData$salary)
+
+masterData %>%
+  na.omit(cols = 'Salary') %>%
+  group_by(vertical) %>%
+  summarize(meanSalary = mean(salary))
+
+masterData %>%
+  na.omit(cols = time_to_fill) %>%
+  group_by(vertical) %>%
+  summarize(medianTimeToFill = median(time_to_fill))
+
+masterData %>%
+  group_by(vertical) %>%
+  summarize(pctOpen = mean(100 * is.na(time_to_fill)))
+
+masterData %>%
+  filter(as.Date('2018-07-30') - post_date < 30) %>%
+  group_by(vertical) %>%
+  summarize(pctOpen = mean(100 * is.na(time_to_fill)))
+
+masterData %>%
+  group_by(vertical) %>%
+  summarize(medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE))
+```
+
+
+### How are skills shaping demand
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(tagsData, by = c('job_id'), suffix = c('_master', '_tags')) %>%
+  group_by(tag) %>%
+  summarize(tagCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(tagCount))
+```
+
+
+### How metrics define high demand jobs
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(roleData, by = c('job_id'), suffix = c('_master', '_role')) %>%
+  group_by(role) %>%
+  summarize(roleCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(roleCount))
+```
+
+
+### How should demand be defined?
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  summarize(medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE))
+```
+
+
+
+### How demand varies across markets?
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(roleData, by = c('job_id'), suffix = c('_master', '_role')) %>%
+  group_by(state) %>%
+  summarize(roleCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(roleCount))
+```
+
+
+### What are the key skills that are driving the highest demand for selected jobs?
+Is this question different than 2?
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(tagsData, by = c('job_id'), suffix = c('_master', '_tags')) %>%
+  group_by(tag) %>%
+  summarize(tagCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(tagCount))
+```
+
+
+### How do these demand drivers vary across markets?
+
+
+
+```{r}
+masterData$salary <- ifelse(is.na(masterData$salary),0,masterData$salary)
+masterData$time_to_fill <- ifelse(is.na(masterData$time_to_fill),0,masterData$time_to_fill)
+cor(masterData$time_to_fill, masterData$salary)
+```
+
