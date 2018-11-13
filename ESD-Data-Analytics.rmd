@@ -40,14 +40,16 @@ dbDisconnect(mySQLConn)
 write.csv(masterData, file = './masterData.csv', row.names = FALSE)
 write.csv(roleData, file = './roleData.csv', row.names = FALSE)
 write.csv(tagsData, file = './tagsData.csv', row.names = FALSE)
+
+write.csv(rolesCollapsed, file = './rolesCollapsed1.csv', row.names = FALSE)
 ```
 
 
 ### Read the data from files
 ```{r}
 masterData <- read.csv('./masterData.csv', header = TRUE, stringsAsFactors = FALSE)
-roleData <- read.csv('./roleData.csv', header = TRUE, stringsAsFactors = TRUE)
-tagsData <- read.csv('./tagsData.csv', header = TRUE, stringsAsFactors = TRUE)
+roleData <- read.csv('./roleData.csv', header = TRUE, stringsAsFactors = FALSE)
+tagsData <- read.csv('./tagsData.csv', header = TRUE, stringsAsFactors = FALSE)
 ```
 
 
@@ -160,3 +162,60 @@ masterData$time_to_fill <- ifelse(is.na(masterData$time_to_fill),0,masterData$ti
 cor(masterData$time_to_fill, masterData$salary)
 ```
 
+
+### Clustering
+```{r}
+library(tm)
+library(dbscan)
+library(proxy)
+library(dplyr)
+
+constructionJobs <- masterData %>%
+  filter(vertical == 'Construction') %>%
+  na.omit()
+
+rolesCollapsed <- roleData %>%
+  group_by(job_id) %>%
+  summarize(roles = paste(role, collapse = ' '))
+
+tagsCollapsed <- tagsData %>%
+  group_by(job_id) %>%
+  summarize(tags = paste(tag, collapse = ' '))
+
+joinedData <- constructionJobs %>%
+  inner_join(rolesCollapsed, by = c('job_id')) %>%
+  #inner_join(tagsCollapsed, by = c('job_id')) %>%
+  mutate(salary = (salary - mean(salary)) / sd(salary)) %>%
+  select(time_to_fill, company, salary, latitude, longitude, location, roles)
+
+roles_tfidf_matrix <- VectorSource(joinedData$roles) %>%
+  Corpus() %>%
+  DocumentTermMatrix() %>%
+  weightTfIdf() %>%
+  removeSparseTerms(.999) %>%
+  as.matrix(weighted_tdm)
+
+roles_kmeans <- kmeans(roles_tfidf_matrix, centers = 5)
+joinedData$roleCluster <- roles_kmeans$cluster
+
+location_dbscan <- dbscan(select(joinedData, latitude, longitude), eps = .15, minPts = 100)
+location_kmeans <- kmeans(select(joinedData, latitude, longitude), centers = 10)
+joinedData$locationCluster <- location_kmeans$cluster
+
+groups  <- joinedData %>% filter(locationCluster != 0)
+noise  <- joinedData %>% filter(locationCluster == 0)
+
+ggplot(joinedData, aes(x = longitude, y = latitude, alpha = 0.5)) + 
+  #geom_point(aes(fill = "grey"), noise) +
+  geom_point(aes(colour = as.factor(locationCluster)), groups,
+             size = 3) +
+  coord_map() +
+  #theme_stripped +
+  #theme_empty +
+  theme(legend.position = "none")
+
+joinedData$roleCluster <- factor(joinedData$roleCluster)
+joinedData$locationCluster <- factor(joinedData$locationCluster)
+
+lm.construction <- lm(time_to_fill ~ salary + roleCluster + locationCluster, data = joinedData)
+```
