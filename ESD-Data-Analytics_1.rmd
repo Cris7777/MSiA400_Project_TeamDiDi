@@ -1,0 +1,245 @@
+---
+title: "ESD-Data-Analysis"
+author: "Alex Burzinski"
+date: "10/30/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Import libraries
+```{r}
+library(dplyr)
+```
+
+### Import the Data
+```{r}
+library(RMySQL)
+
+mySQLConn <- DBI::dbConnect(MySQL(), user='greenwic_nwu_147', password=rstudioapi::askForPassword('Database Password:')
+                 ,dbname='greenwic_edu_nwu', host='67.225.186.169')
+
+#dbListTables(mydb)
+
+masterTable = 'greenwich_master_nwu_fall_2018_proj1'
+roleTable = 'greenwich_role_nwu_fall_2018_proj1'
+tagsTable = 'greenwich_tags_nwu_fall_2018_proj1'
+
+
+masterData <- dbReadTable(mySQLConn, masterTable)
+roleData <- dbReadTable(mySQLConn, roleTable)
+tagsData <- dbReadTable(mySQLConn, tagsTable)
+
+dbDisconnect(mySQLConn)
+```
+
+### Save data to csv files
+```{r}
+write.csv(masterData, file = './masterData.csv', row.names = FALSE)
+write.csv(roleData, file = './roleData.csv', row.names = FALSE)
+write.csv(tagsData, file = './tagsData.csv', row.names = FALSE)
+
+#write.csv(rolesCollapsed, file = './rolesCollapsed1.csv', row.names = FALSE)
+```
+
+
+### Read the data from files
+```{r}
+masterData <- read.csv('./masterData.csv', header = TRUE, stringsAsFactors = FALSE)
+roleData <- read.csv('./roleData.csv', header = TRUE, stringsAsFactors = FALSE)
+tagsData <- read.csv('./tagsData.csv', header = TRUE, stringsAsFactors = FALSE)
+```
+
+
+### Data Cleansing
+```{r}
+masterData$salary <- as.numeric(masterData$salary)
+masterData$post_date <- as.Date(masterData$post_date, format = '%Y-%m-%d')
+masterData$fill_date <- as.Date(masterData$fill_date, format = '%Y-%m-%d')
+```
+
+
+### Examine demand for talent for each industry
+```{r}
+barplot(table(masterData$vertical))
+
+masterData$salary <- as.numeric(masterData$salary)
+
+masterData %>%
+  na.omit(cols = 'Salary') %>%
+  group_by(vertical) %>%
+  summarize(meanSalary = mean(salary))
+
+masterData %>%
+  na.omit(cols = time_to_fill) %>%
+  group_by(vertical) %>%
+  summarize(medianTimeToFill = median(time_to_fill))
+
+masterData %>%
+  group_by(vertical) %>%
+  summarize(pctOpen = mean(100 * is.na(time_to_fill)))
+
+masterData %>%
+  filter(as.Date('2018-07-30') - post_date < 30) %>%
+  group_by(vertical) %>%
+  summarize(pctOpen = mean(100 * is.na(time_to_fill)))
+
+masterData %>%
+  group_by(vertical) %>%
+  summarize(medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE))
+```
+
+
+### How are skills shaping demand
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(tagsData, by = c('job_id'), suffix = c('_master', '_tags')) %>%
+  group_by(tag) %>%
+  summarize(tagCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(tagCount))
+```
+
+
+### How metrics define high demand jobs
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(roleData, by = c('job_id'), suffix = c('_master', '_role')) %>%
+  group_by(role) %>%
+  summarize(roleCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(roleCount))
+```
+
+
+### How should demand be defined?
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  summarize(medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE))
+```
+
+
+
+### How demand varies across markets?
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(roleData, by = c('job_id'), suffix = c('_master', '_role')) %>%
+  group_by(state) %>%
+  summarize(roleCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(roleCount))
+```
+
+
+### What are the key skills that are driving the highest demand for selected jobs?
+Is this question different than 2?
+```{r}
+masterData %>%
+  filter(vertical == 'Construction') %>%
+  inner_join(tagsData, by = c('job_id'), suffix = c('_master', '_tags')) %>%
+  group_by(tag) %>%
+  summarize(tagCount = n(), medianTimeToFill = median(time_to_fill, na.rm = TRUE),
+            pctOpen = mean(100 * is.na(time_to_fill)), medianSalary = median(salary, na.rm = TRUE)) %>%
+  arrange(desc(tagCount))
+```
+
+
+### How do these demand drivers vary across markets?
+
+
+
+```{r}
+masterData$salary <- ifelse(is.na(masterData$salary),0,masterData$salary)
+masterData$time_to_fill <- ifelse(is.na(masterData$time_to_fill),0,masterData$time_to_fill)
+cor(masterData$time_to_fill, masterData$salary)
+```
+
+
+### Clustering
+```{r}
+library(tm)
+library(dbscan)
+library(proxy)
+library(dplyr)
+
+constructionJobs <- masterData %>%
+  filter(vertical == 'Construction') %>%
+  na.omit()
+
+rolesCollapsed <- roleData %>%
+  group_by(job_id) %>%
+  summarize(roles = paste(role, collapse = ' '))
+
+#tagsCollapsed <- tagsData %>%
+#  group_by(job_id) %>%
+#  summarize(tags = paste(tag, collapse = ' '))
+
+joinedData <- constructionJobs %>%
+  inner_join(rolesCollapsed, by = c('job_id')) %>%
+  #inner_join(tagsCollapsed, by = c('job_id')) %>%
+  mutate(salary = (salary - mean(salary)) / sd(salary)) %>%
+  select(time_to_fill, company, salary, latitude, longitude, location, roles)
+
+roles_tfidf_matrix <- VectorSource(joinedData$roles) %>%
+  Corpus() %>%
+  DocumentTermMatrix() %>%
+  weightTfIdf() %>%
+  removeSparseTerms(.999) %>%
+  as.matrix(weighted_tdm)
+
+roles_kmeans <- kmeans(roles_tfidf_matrix, centers = 5)
+joinedData$roleCluster <- roles_kmeans$cluster
+
+location_dbscan <- dbscan(select(joinedData, latitude, longitude), eps = .15, minPts = 100)
+location_kmeans <- kmeans(select(joinedData, latitude, longitude), centers = 10)
+joinedData$locationCluster <- location_kmeans$cluster
+
+groups  <- joinedData %>% filter(locationCluster != 0)
+noise  <- joinedData %>% filter(locationCluster == 0)
+
+library(ggplot2)
+
+ggplot(joinedData, aes(x = longitude, y = latitude, alpha = 0.5)) + 
+  #geom_point(aes(fill = "grey"), noise) +
+  geom_point(aes(colour = as.factor(locationCluster)), groups,
+             size = 3) +
+  coord_map() +
+  #theme_stripped +
+  #theme_empty +
+  theme(legend.position = "none")
+
+joinedData$roleCluster <- factor(joinedData$roleCluster)
+joinedData$locationCluster <- factor(joinedData$locationCluster)
+
+lm.construction <- lm(time_to_fill ~ salary + roleCluster + locationCluster, data = joinedData)
+summary(lm.construction)
+```
+
+```{r}
+new1_joineddata = joinedData[-c(189512,236772,410380)]
+lm.construction_new1 <- lm(time_to_fill ~ salary + roleCluster + locationCluster, data = new1_joineddata)
+summary(lm.construction_new1)
+```
+
+```{r}
+#head(masterData)
+sw_data = data.frame(joinedData$time_to_fill, joinedData$salary, joinedData$roleCluster, joinedData$locationCluster)
+
+sw_fit = lm(joinedData.time_to_fill ~ ., data = sw_data)
+step(sw_fit)
+
+plot(lm.construction, which = c(1,2,4,6))
+```
+
+```{r}
+plot(sw_data)
+```
+
